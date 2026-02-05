@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import yt_dlp
+import random
 from flask import Flask, render_template_string, request, jsonify, send_file
 from flask_cors import CORS
 from pathlib import Path
@@ -13,7 +14,16 @@ CORS(app)
 DOWNLOAD_FOLDER = Path("/tmp/downloads")
 DOWNLOAD_FOLDER.mkdir(exist_ok=True)
 
-# HTML Template (embedded so no templates folder needed)
+# User agents to rotate (makes requests look like real browsers)
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Edg/120.0.0.0'
+]
+
+# HTML Template (same as before)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -119,6 +129,14 @@ HTML_TEMPLATE = """
             display: none;
         }
         .error.active { display: block; }
+        .tip {
+            background: #fff3e0;
+            color: #e65100;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-size: 13px;
+        }
     </style>
 </head>
 <body>
@@ -151,6 +169,10 @@ HTML_TEMPLATE = """
                 <p id="filename"></p>
                 <button class="btn-primary" onclick="getFile()">📥 Download File</button>
             </div>
+            
+            <div class="tip" id="tip" style="display:none;">
+                💡 If download fails, try a different video. Some videos have restrictions.
+            </div>
         </div>
     </div>
 
@@ -160,17 +182,21 @@ HTML_TEMPLATE = """
         let downloadId = null;
 
         async function analyze() {
-            const url = document.getElementById('url').value;
-            if (!url) return showError('Enter a URL');
+            const url = document.getElementById('url').value.trim();
+            if (!url) return showError('Enter a YouTube URL');
+            
+            // Remove tracking parameters
+            const cleanUrl = url.split('&')[0].split('?si=')[0];
             
             showLoading(true);
             hideError();
+            document.getElementById('tip').style.display = 'none';
             
             try {
                 const res = await fetch('/api/info', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({url})
+                    body: JSON.stringify({url: cleanUrl})
                 });
                 const data = await res.json();
                 
@@ -180,6 +206,9 @@ HTML_TEMPLATE = """
                 showInfo(data);
             } catch (e) {
                 showError(e.message);
+                if (e.message.includes('bot') || e.message.includes('sign in')) {
+                    document.getElementById('tip').style.display = 'block';
+                }
             }
             showLoading(false);
         }
@@ -191,6 +220,11 @@ HTML_TEMPLATE = """
             
             const grid = document.getElementById('qualities');
             grid.innerHTML = '';
+            
+            if (!data.formats || data.formats.length === 0) {
+                grid.innerHTML = '<p style="grid-column: 2; color: #666;">No formats available. Try MP3 only.</p>';
+                return;
+            }
             
             data.formats.forEach(f => {
                 const btn = document.createElement('div');
@@ -209,12 +243,13 @@ HTML_TEMPLATE = """
         }
 
         async function download() {
+            if (!selectedFormat) return showError('Select a quality first');
             await startDownload(selectedFormat.id, 'mp4');
         }
 
         async function downloadMp3() {
-            // Auto select best audio
-            const audioFmt = currentData.audio_formats[0];
+            const audioFmt = currentData.audio_formats && currentData.audio_formats[0];
+            if (!audioFmt) return showError('No audio available');
             await startDownload(audioFmt.id, 'mp3');
         }
 
@@ -267,49 +302,88 @@ HTML_TEMPLATE = """
 </html>
 """
 
+def get_ydl_opts():
+    """Get yt-dlp options with anti-bot measures"""
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'user_agent': random.choice(USER_AGENTS),
+        'headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+        },
+        # Bypass age restriction and login
+        'age_limit': None,
+        'geo_bypass': True,
+        'geo_bypass_country': 'US',
+        # Don't use cookies file (causes issues on Railway)
+        'cookiefile': None,
+        'nocheckcertificate': True,
+        # Extractor options
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android'],  # Use android client (less restrictive)
+                'player_skip': ['webpage', 'config', 'js'],
+            }
+        }
+    }
+
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/api/info', methods=['POST'])
 def get_info():
-    url = request.json.get('url')
-    if not url:
-        return jsonify({'error': 'URL required'}), 400
-    
-    ydl_opts = {'quiet': True, 'no_warnings': True}
+    url = request.json.get('url', '')
+    if not url or 'youtube.com' not in url and 'youtu.be' not in url:
+        return jsonify({'error': 'Valid YouTube URL required'}), 400
     
     try:
+        ydl_opts = get_ydl_opts()
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
+            if not info:
+                return jsonify({'error': 'Could not fetch video info'}), 400
+            
             formats = []
-            seen = set()
+            seen_qualities = set()
             
-            # Video formats
+            # Get video formats
             for f in info.get('formats', []):
-                if f.get('ext') == 'mp4' and f.get('height'):
-                    q = f"{f['height']}p"
-                    if q not in seen and f.get('filesize'):
-                        seen.add(q)
-                        formats.append({
-                            'id': f['format_id'],
-                            'quality': q,
-                            'size': format_size(f['filesize'])
-                        })
+                # Skip storyboard/images
+                if f.get('acodec') == 'none' and f.get('vcodec') != 'none':
+                    height = f.get('height', 0)
+                    if height and height not in seen_qualities:
+                        filesize = f.get('filesize') or f.get('filesize_approx', 0)
+                        if filesize:
+                            seen_qualities.add(height)
+                            formats.append({
+                                'id': f['format_id'],
+                                'quality': f"{height}p",
+                                'size': format_size(filesize)
+                            })
             
-            # Audio formats
+            # Get audio formats
             audio_formats = []
+            seen_audio = set()
             for f in info.get('formats', []):
-                if f.get('acodec') != 'none' and not f.get('height'):
+                if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
                     abr = f.get('abr', 0)
-                    if abr and f.get('filesize'):
+                    if abr and abr not in seen_audio:
+                        seen_audio.add(abr)
+                        filesize = f.get('filesize') or f.get('filesize_approx', 0)
                         audio_formats.append({
                             'id': f['format_id'],
                             'quality': f"{int(abr)}kbps",
-                            'size': format_size(f['filesize'])
+                            'size': format_size(filesize)
                         })
             
+            # Sort by quality
             formats.sort(key=lambda x: int(x['quality'][:-1]), reverse=True)
             audio_formats.sort(key=lambda x: x['quality'], reverse=True)
             
@@ -317,13 +391,23 @@ def get_info():
                 'url': url,
                 'title': info.get('title', 'Unknown'),
                 'thumbnail': info.get('thumbnail', ''),
-                'formats': formats[:6],
+                'formats': formats[:8],  # Limit to top 8
                 'audio_formats': audio_formats[:3]
             })
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        error_msg = str(e)
+        # Make error user-friendly
+        if 'sign in' in error_msg.lower() or 'bot' in error_msg.lower():
+            error_msg = 'YouTube blocked this request. Try a different video or check if the video is age-restricted/private.'
+        elif 'unavailable' in error_msg.lower():
+            error_msg = 'Video is unavailable, private, or region-blocked.'
+        return jsonify({'error': error_msg}), 400
 
 def format_size(bytes_val):
+    """Format bytes to human readable"""
+    if not bytes_val:
+        return 'Unknown size'
     for unit in ['B', 'KB', 'MB', 'GB']:
         if bytes_val < 1024:
             return f"{bytes_val:.1f} {unit}"
@@ -342,35 +426,35 @@ def download():
     
     download_id = str(uuid.uuid4())[:8]
     
-    ydl_opts = {
-        'format': format_id,
-        'outtmpl': str(DOWNLOAD_FOLDER / f'{download_id}_%(title)s.%(ext)s'),
-        'quiet': True,
-        'merge_output_format': 'mp4',
-    }
-    
-    # Add postprocessor for MP3
-    if file_type == 'mp3':
-        ydl_opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
-        ydl_opts['outtmpl'] = str(DOWNLOAD_FOLDER / f'{download_id}_%(title)s.%(ext)s')
-    
     try:
+        ydl_opts = get_ydl_opts()
+        ydl_opts['format'] = format_id
+        ydl_opts['outtmpl'] = str(DOWNLOAD_FOLDER / f'{download_id}_%(title)s.%(ext)s')
+        
+        # Add postprocessor for MP3
+        if file_type == 'mp3':
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }]
+            ydl_opts['format'] = 'bestaudio/best'
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
             
-            # Find actual file
+            # Find the downloaded file
             files = list(DOWNLOAD_FOLDER.glob(f"{download_id}_*"))
             if not files:
-                return jsonify({'error': 'Download failed'}), 500
+                return jsonify({'error': 'Download failed - file not created'}), 500
             
             actual_file = files[0]
             ext = '.mp3' if file_type == 'mp3' else '.mp4'
             clean_name = sanitize_filename(info.get('title', 'video')) + ext
+            
+            # Rename for clean download
+            new_path = actual_file.parent / f"{download_id}_{clean_name}"
+            actual_file.rename(new_path)
             
             return jsonify({
                 'success': True,
@@ -379,19 +463,42 @@ def download():
             })
             
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        error_msg = str(e)
+        if 'sign in' in error_msg.lower():
+            error_msg = 'YouTube blocked this download. The video may have restrictions.'
+        return jsonify({'error': error_msg}), 400
 
 def sanitize_filename(title):
-    return re.sub(r'[<>:"/\\|?*]', '', title)[:80]
+    """Clean filename for safe usage"""
+    if not title:
+        title = 'video'
+    # Remove invalid characters
+    clean = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Limit length
+    return clean[:80]
 
 @app.route('/api/file/<download_id>')
 def serve_file(download_id):
-    files = list(DOWNLOAD_FOLDER.glob(f"{download_id}_*"))
-    if not files:
-        return jsonify({'error': 'File not found'}), 404
-    
-    file_path = files[0]
-    return send_file(file_path, as_attachment=True)
+    """Serve the downloaded file"""
+    try:
+        files = list(DOWNLOAD_FOLDER.glob(f"{download_id}_*"))
+        if not files:
+            return jsonify({'error': 'File not found or expired'}), 404
+        
+        file_path = files[0]
+        
+        # Determine mime type
+        mime = 'audio/mpeg' if file_path.suffix == '.mp3' else 'video/mp4'
+        
+        return send_file(
+            file_path,
+            mimetype=mime,
+            as_attachment=True,
+            download_name=file_path.name.replace(f"{download_id}_", "")
+        )
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
