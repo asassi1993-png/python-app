@@ -1,464 +1,397 @@
 import os
-import streamlit as st
+import re
+import uuid
+import yt_dlp
+from flask import Flask, render_template_string, request, jsonify, send_file
+from flask_cors import CORS
+from pathlib import Path
 
-port = int(os.environ.get("PORT", 8080))
-import streamlit as st
-from PIL import Image
-import io
-import base64
-from gtts import gTTS
-import os
-import tempfile
-import time
+app = Flask(__name__)
+CORS(app)
 
-# Page configuration
-st.set_page_config(
-    page_title="AI Vision & Voice Studio",
-    page_icon="🎬",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Railway uses /tmp for writable storage
+DOWNLOAD_FOLDER = Path("/tmp/downloads")
+DOWNLOAD_FOLDER.mkdir(exist_ok=True)
 
-# Custom CSS for modern dark theme with animations
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
-    
-    * {
-        font-family: 'Inter', sans-serif;
-    }
-    
-    .main {
-        background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
-        color: #ffffff;
-    }
-    
-    .stApp {
-        background: linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%);
-    }
-    
-    /* Header styling */
-    .main-header {
-        text-align: center;
-        padding: 2rem 0;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        font-size: 3rem;
-        font-weight: 700;
-        margin-bottom: 0.5rem;
-    }
-    
-    .sub-header {
-        text-align: center;
-        color: #a0a0b0;
-        font-size: 1.2rem;
-        margin-bottom: 3rem;
-    }
-    
-    /* Card styling */
-    .feature-card {
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        border-radius: 20px;
-        padding: 2rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-        margin-bottom: 2rem;
-    }
-    
-    .feature-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
-        border-color: rgba(102, 126, 234, 0.5);
-    }
-    
-    .card-title {
-        font-size: 1.5rem;
-        font-weight: 600;
-        color: #667eea;
-        margin-bottom: 1rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-    
-    /* Button styling */
-    .stButton>button {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 12px !important;
-        padding: 0.75rem 2rem !important;
-        font-weight: 600 !important;
-        transition: all 0.3s ease !important;
-        width: 100%;
-    }
-    
-    .stButton>button:hover {
-        transform: scale(1.05);
-        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4) !important;
-    }
-    
-    /* Input styling */
-    .stTextArea>div>div>textarea {
-        background: rgba(255, 255, 255, 0.05) !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        border-radius: 12px !important;
-        color: white !important;
-        font-size: 1rem !important;
-    }
-    
-    .stSelectbox>div>div {
-        background: rgba(255, 255, 255, 0.05) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    }
-    
-    /* File uploader styling */
-    .stFileUploader>div>button {
-        background: rgba(102, 126, 234, 0.2) !important;
-        border: 2px dashed #667eea !important;
-        border-radius: 12px !important;
-        color: #667eea !important;
-    }
-    
-    /* Progress bar */
-    .stProgress>div>div>div {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%) !important;
-    }
-    
-    /* Audio player styling */
-    audio {
-        width: 100%;
-        border-radius: 12px;
-        margin-top: 1rem;
-    }
-    
-    /* Success message */
-    .success-msg {
-        background: rgba(34, 197, 94, 0.1);
-        border: 1px solid rgba(34, 197, 94, 0.3);
-        border-radius: 12px;
-        padding: 1rem;
-        color: #22c55e;
-        text-align: center;
-        margin-top: 1rem;
-    }
-    
-    /* Loading animation */
-    @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-    }
-    
-    .loading {
-        animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-        text-align: center;
-        color: #667eea;
-        font-size: 1.2rem;
-        margin: 2rem 0;
-    }
-    
-    /* Video container */
-    .video-container {
-        background: rgba(0, 0, 0, 0.3);
-        border-radius: 16px;
-        padding: 1rem;
-        margin-top: 1rem;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    
-    /* Tabs styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-        background: rgba(255, 255, 255, 0.05);
-        padding: 0.5rem;
-        border-radius: 16px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        color: #a0a0b0 !important;
-        font-weight: 600;
-        border-radius: 12px;
-        padding: 0.75rem 1.5rem;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%) !important;
-        color: white !important;
-    }
-    
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: rgba(255, 255, 255, 0.02);
-    }
-    
-    /* Hide default elements */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
-
-# Header
-st.markdown('<h1 class="main-header">🎬 AI Vision & Voice Studio</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Transform images into videos and text into lifelike speech</p>', unsafe_allow_html=True)
-
-# Initialize session state
-if 'video_generated' not in st.session_state:
-    st.session_state.video_generated = False
-if 'audio_generated' not in st.session_state:
-    st.session_state.audio_generated = False
-if 'video_description' not in st.session_state:
-    st.session_state.video_description = ""
-
-# Sidebar for API keys and settings
-with st.sidebar:
-    st.markdown("### ⚙️ Configuration")
-    st.markdown("---")
-    
-    # API Key inputs (simulated for demo)
-    st.text_input("🔑 OpenAI API Key", type="password", placeholder="sk-...", key="openai_key")
-    st.text_input("🔑 ElevenLabs API Key", type="password", placeholder="...", key="eleven_key")
-    
-    st.markdown("---")
-    st.markdown("### 📊 Usage Stats")
-    st.metric("Videos Generated", "0")
-    st.metric("Audio Clips Created", "0")
-    
-    st.markdown("---")
-    st.markdown("### 💡 Tips")
-    st.info("For best results, use high-quality images and clear text descriptions.")
-
-# Create tabs for different sections
-tab1, tab2 = st.tabs(["🎥 AI Video Generator", "🔊 Voice Synthesizer"])
-
-# Tab 1: Image to Video
-with tab1:
-    st.markdown('<div class="feature-card">', unsafe_allow_html=True)
-    st.markdown('<div class="card-title">🖼️ Upload & Animate</div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        uploaded_file = st.file_uploader(
-            "Drop your image here",
-            type=['png', 'jpg', 'jpeg', 'webp'],
-            help="Supported formats: PNG, JPG, JPEG, WEBP"
-        )
+# HTML Template (embedded so no templates folder needed)
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartTube Downloader</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 24px; margin-bottom: 5px; }
+        .content { padding: 25px; }
+        .input-group { margin-bottom: 20px; }
+        input[type="text"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 16px;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        button {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .btn-mp3 {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        .video-info {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+            display: none;
+        }
+        .video-info.active { display: block; }
+        .thumbnail { width: 100%; border-radius: 8px; margin-bottom: 15px; }
+        .title { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+        .qualities { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 15px 0; }
+        .quality-btn {
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            text-align: center;
+        }
+        .quality-btn.selected {
+            border-color: #667eea;
+            background: #667eea;
+            color: white;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        .success {
+            background: #e8f5e9;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin-top: 20px;
+            display: none;
+        }
+        .success.active { display: block; }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+        .error.active { display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📺 SmartTube</h1>
+            <p>YouTube Downloader</p>
+        </div>
         
-        if uploaded_file is not None:
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Image", use_column_width=True, output_format="auto")
+        <div class="content">
+            <div class="input-group">
+                <input type="text" id="url" placeholder="Paste YouTube URL here...">
+            </div>
             
-            # Store image in session for processing
-            st.session_state.uploaded_image = image
-    
-    with col2:
-        st.markdown("### ✨ Video Settings")
-        
-        video_description = st.text_area(
-            "Describe the motion/animation",
-            placeholder="E.g., 'Camera slowly zooms in, gentle wind moves the trees, sun sets in background...'",
-            height=120
-        )
-        
-        duration = st.slider("Duration (seconds)", 5, 30, 20)
-        
-        style = st.selectbox(
-            "Animation Style",
-            ["Cinematic", "Realistic", "Artistic", "3D Animation", "Slow Motion"]
-        )
-        
-        quality = st.select_slider(
-            "Quality",
-            options=["Draft", "Standard", "High", "Ultra"],
-            value="High"
-        )
-        
-        if st.button("🎬 Generate Video", key="gen_video"):
-            if uploaded_file is None:
-                st.error("⚠️ Please upload an image first!")
-            elif not video_description:
-                st.error("⚠️ Please describe the animation!")
-            else:
-                # Simulate video generation process
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                stages = [
-                    "Analyzing image composition...",
-                    "Generating motion vectors...",
-                    "Rendering frames...",
-                    "Applying cinematic effects...",
-                    "Finalizing video..."
-                ]
-                
-                for i, stage in enumerate(stages):
-                    status_text.markdown(f'<div class="loading">{stage}</div>', unsafe_allow_html=True)
-                    progress_bar.progress((i + 1) * 20)
-                    time.sleep(0.8)
-                
-                status_text.empty()
-                progress_bar.empty()
-                
-                # Store description for display
-                st.session_state.video_description = video_description
-                st.session_state.video_generated = True
-                
-                st.success("✅ Video generated successfully!")
-    
-    # Display generated video placeholder
-    if st.session_state.video_generated:
-        st.markdown('<div class="video-container">', unsafe_allow_html=True)
-        st.markdown("### 🎞️ Generated Video Preview")
-        
-        # Create a placeholder video using HTML5 video element with a demo video
-        video_html = """
-        <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; border-radius: 16px; background: linear-gradient(45deg, #667eea, #764ba2);">
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white;">
-                <div style="font-size: 4rem; margin-bottom: 1rem;">▶️</div>
-                <div style="font-size: 1.2rem; font-weight: 600;">AI Generated Video</div>
-                <div style="font-size: 0.9rem; opacity: 0.8; margin-top: 0.5rem;">Duration: 20s | Quality: High</div>
+            <button class="btn-primary" onclick="analyze()">🔍 Analyze Video</button>
+            
+            <div class="error" id="error"></div>
+            <div class="loading" id="loading" style="display:none;">⏳ Loading...</div>
+            
+            <div class="video-info" id="info">
+                <img class="thumbnail" id="thumb" src="">
+                <div class="title" id="title"></div>
+                <div class="qualities" id="qualities"></div>
+                <button class="btn-primary" id="downloadBtn" onclick="download()" disabled>⬇️ Download MP4</button>
+                <button class="btn-mp3" onclick="downloadMp3()">🎵 Download MP3</button>
+            </div>
+            
+            <div class="success" id="success">
+                <h3>✅ Ready!</h3>
+                <p id="filename"></p>
+                <button class="btn-primary" onclick="getFile()">📥 Download File</button>
             </div>
         </div>
-        """
-        st.markdown(video_html, unsafe_allow_html=True)
-        
-        st.markdown(f"**Description:** {st.session_state.video_description}")
-        st.markdown(f"**Settings:** {style} style • {quality} quality • {duration}s duration")
-        
-        col_dl1, col_dl2, col_dl3 = st.columns(3)
-        with col_dl1:
-            st.button("💾 Download MP4", key="dl_mp4")
-        with col_dl2:
-            st.button("🔄 Regenerate", key="regen")
-        with col_dl3:
-            st.button("📤 Share", key="share")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+    </div>
 
-# Tab 2: Text to Speech
-with tab2:
-    st.markdown('<div class="feature-card">', unsafe_allow_html=True)
-    st.markdown('<div class="card-title">🎙️ Text to Speech</div>', unsafe_allow_html=True)
-    
-    col3, col4 = st.columns([2, 1])
-    
-    with col3:
-        text_input = st.text_area(
-            "Enter your text",
-            placeholder="Type or paste the text you want to convert to speech...",
-            height=200,
-            max_chars=5000
-        )
-        
-        char_count = len(text_input) if text_input else 0
-        st.caption(f"Character count: {char_count}/5000")
-    
-    with col4:
-        st.markdown("### 🎛️ Voice Settings")
-        
-        language = st.selectbox(
-            "Language",
-            ["English (US)", "English (UK)", "Spanish", "French", "German", 
-             "Italian", "Portuguese", "Chinese", "Japanese", "Korean", "Arabic", "Hindi"]
-        )
-        
-        voice_gender = st.radio(
-            "Voice Gender",
-            ["Female", "Male"],
-            horizontal=True
-        )
-        
-        voice_style = st.select_slider(
-            "Voice Style",
-            options=["Natural", "Professional", "Casual", "Narrative", "Energetic"],
-            value="Natural"
-        )
-        
-        speed = st.slider("Speed", 0.5, 2.0, 1.0, 0.1)
-        
-        pitch = st.slider("Pitch", -10, 10, 0)
-        
-        if st.button("🔊 Generate Voice", key="gen_voice"):
-            if not text_input:
-                st.error("⚠️ Please enter some text!")
-            else:
-                with st.spinner("Synthesizing voice..."):
-                    # Simulate processing
-                    time.sleep(1.5)
-                    
-                    # Create TTS using gTTS (Google Text-to-Speech)
-                    try:
-                        lang_map = {
-                            "English (US)": "en", "English (UK)": "en-uk",
-                            "Spanish": "es", "French": "fr", "German": "de",
-                            "Italian": "it", "Portuguese": "pt", "Chinese": "zh-cn",
-                            "Japanese": "ja", "Korean": "ko", "Arabic": "ar", "Hindi": "hi"
-                        }
-                        
-                        selected_lang = lang_map.get(language, "en")
-                        
-                        # Create temporary file for audio
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
-                            tts = gTTS(text=text_input, lang=selected_lang, slow=False)
-                            tts.save(tmp_file.name)
-                            tmp_file_path = tmp_file.name
-                        
-                        st.session_state.audio_generated = True
-                        st.session_state.audio_path = tmp_file_path
-                        st.session_state.audio_text = text_input
-                        
-                    except Exception as e:
-                        st.error(f"Error generating audio: {str(e)}")
-                        st.session_state.audio_generated = False
-    
-    # Display generated audio
-    if st.session_state.get('audio_generated', False):
-        st.markdown("### 🎵 Generated Audio")
-        
-        # Read audio file
-        try:
-            with open(st.session_state.audio_path, 'rb') as audio_file:
-                audio_bytes = audio_file.read()
+    <script>
+        let currentData = null;
+        let selectedFormat = null;
+        let downloadId = null;
+
+        async function analyze() {
+            const url = document.getElementById('url').value;
+            if (!url) return showError('Enter a URL');
             
-            st.audio(audio_bytes, format='audio/mp3')
+            showLoading(true);
+            hideError();
             
-            col_audio1, col_audio2, col_audio3 = st.columns(3)
-            with col_audio1:
-                st.download_button(
-                    label="💾 Download MP3",
-                    data=audio_bytes,
-                    file_name="generated_voice.mp3",
-                    mime="audio/mp3"
-                )
-            with col_audio2:
-                if st.button("🗑️ Clear", key="clear_audio"):
-                    st.session_state.audio_generated = False
-                    if os.path.exists(st.session_state.audio_path):
-                        os.remove(st.session_state.audio_path)
-                    st.rerun()
-            with col_audio3:
-                st.button("🔁 New Generation", key="new_gen")
-            
-            # Display transcript
-            with st.expander("📄 View Transcript"):
-                st.write(st.session_state.audio_text)
+            try {
+                const res = await fetch('/api/info', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({url})
+                });
+                const data = await res.json();
                 
-        except Exception as e:
-            st.error("Error playing audio file")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+                if (data.error) throw new Error(data.error);
+                
+                currentData = data;
+                showInfo(data);
+            } catch (e) {
+                showError(e.message);
+            }
+            showLoading(false);
+        }
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #666; padding: 2rem;">
-    <p>Powered by Advanced AI Models • Built with Streamlit</p>
-    <p style="font-size: 0.8rem;">Note: This is a demonstration app. For production use, integrate with actual AI video generation APIs.</p>
-</div>
-""", unsafe_allow_html=True)
+        function showInfo(data) {
+            document.getElementById('info').classList.add('active');
+            document.getElementById('thumb').src = data.thumbnail;
+            document.getElementById('title').textContent = data.title;
+            
+            const grid = document.getElementById('qualities');
+            grid.innerHTML = '';
+            
+            data.formats.forEach(f => {
+                const btn = document.createElement('div');
+                btn.className = 'quality-btn';
+                btn.innerHTML = `<div><b>${f.quality}</b></div><small>${f.size}</small>`;
+                btn.onclick = () => selectFormat(f, btn);
+                grid.appendChild(btn);
+            });
+        }
+
+        function selectFormat(fmt, btn) {
+            document.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+            selectedFormat = fmt;
+            document.getElementById('downloadBtn').disabled = false;
+        }
+
+        async function download() {
+            await startDownload(selectedFormat.id, 'mp4');
+        }
+
+        async function downloadMp3() {
+            // Auto select best audio
+            const audioFmt = currentData.audio_formats[0];
+            await startDownload(audioFmt.id, 'mp3');
+        }
+
+        async function startDownload(formatId, type) {
+            showLoading(true);
+            
+            try {
+                const res = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        url: currentData.url,
+                        format_id: formatId,
+                        type: type
+                    })
+                });
+                const data = await res.json();
+                
+                if (data.error) throw new Error(data.error);
+                
+                downloadId = data.download_id;
+                showSuccess(data.filename);
+            } catch (e) {
+                showError(e.message);
+            }
+            showLoading(false);
+        }
+
+        function getFile() {
+            window.location.href = '/api/file/' + downloadId;
+        }
+
+        function showError(msg) {
+            const el = document.getElementById('error');
+            el.textContent = msg;
+            el.classList.add('active');
+        }
+        function hideError() {
+            document.getElementById('error').classList.remove('active');
+        }
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+        function showSuccess(filename) {
+            document.getElementById('success').classList.add('active');
+            document.getElementById('filename').textContent = filename;
+        }
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/api/info', methods=['POST'])
+def get_info():
+    url = request.json.get('url')
+    if not url:
+        return jsonify({'error': 'URL required'}), 400
+    
+    ydl_opts = {'quiet': True, 'no_warnings': True}
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            formats = []
+            seen = set()
+            
+            # Video formats
+            for f in info.get('formats', []):
+                if f.get('ext') == 'mp4' and f.get('height'):
+                    q = f"{f['height']}p"
+                    if q not in seen and f.get('filesize'):
+                        seen.add(q)
+                        formats.append({
+                            'id': f['format_id'],
+                            'quality': q,
+                            'size': format_size(f['filesize'])
+                        })
+            
+            # Audio formats
+            audio_formats = []
+            for f in info.get('formats', []):
+                if f.get('acodec') != 'none' and not f.get('height'):
+                    abr = f.get('abr', 0)
+                    if abr and f.get('filesize'):
+                        audio_formats.append({
+                            'id': f['format_id'],
+                            'quality': f"{int(abr)}kbps",
+                            'size': format_size(f['filesize'])
+                        })
+            
+            formats.sort(key=lambda x: int(x['quality'][:-1]), reverse=True)
+            audio_formats.sort(key=lambda x: x['quality'], reverse=True)
+            
+            return jsonify({
+                'url': url,
+                'title': info.get('title', 'Unknown'),
+                'thumbnail': info.get('thumbnail', ''),
+                'formats': formats[:6],
+                'audio_formats': audio_formats[:3]
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+def format_size(bytes_val):
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_val < 1024:
+            return f"{bytes_val:.1f} {unit}"
+        bytes_val /= 1024
+    return f"{bytes_val:.1f} TB"
+
+@app.route('/api/download', methods=['POST'])
+def download():
+    data = request.json
+    url = data.get('url')
+    format_id = data.get('format_id')
+    file_type = data.get('type', 'mp4')
+    
+    if not url:
+        return jsonify({'error': 'URL required'}), 400
+    
+    download_id = str(uuid.uuid4())[:8]
+    
+    ydl_opts = {
+        'format': format_id,
+        'outtmpl': str(DOWNLOAD_FOLDER / f'{download_id}_%(title)s.%(ext)s'),
+        'quiet': True,
+        'merge_output_format': 'mp4',
+    }
+    
+    # Add postprocessor for MP3
+    if file_type == 'mp3':
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+        ydl_opts['outtmpl'] = str(DOWNLOAD_FOLDER / f'{download_id}_%(title)s.%(ext)s')
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            
+            # Find actual file
+            files = list(DOWNLOAD_FOLDER.glob(f"{download_id}_*"))
+            if not files:
+                return jsonify({'error': 'Download failed'}), 500
+            
+            actual_file = files[0]
+            ext = '.mp3' if file_type == 'mp3' else '.mp4'
+            clean_name = sanitize_filename(info.get('title', 'video')) + ext
+            
+            return jsonify({
+                'success': True,
+                'download_id': download_id,
+                'filename': clean_name
+            })
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+def sanitize_filename(title):
+    return re.sub(r'[<>:"/\\|?*]', '', title)[:80]
+
+@app.route('/api/file/<download_id>')
+def serve_file(download_id):
+    files = list(DOWNLOAD_FOLDER.glob(f"{download_id}_*"))
+    if not files:
+        return jsonify({'error': 'File not found'}), 404
+    
+    file_path = files[0]
+    return send_file(file_path, as_attachment=True)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
